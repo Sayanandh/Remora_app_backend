@@ -78,16 +78,26 @@ async def ping_my_location(
     # Ensure per-patient profile document exists
     await _ensure_patient_profile(user_id)
 
+    now = datetime.now(timezone.utc)
     doc: Dict[str, Any] = {
         "userId": user_id,
         "latitude": body.latitude,
         "longitude": body.longitude,
         "accuracy": body.accuracy,
         "battery": body.battery,
-        "recordedAt": body.recordedAt or datetime.now(timezone.utc),
+        "recordedAt": body.recordedAt or now,
+        "updatedAt": now,
     }
-    result = await db["PatientLocation"].insert_one(doc)
-    created = await db["PatientLocation"].find_one({"_id": result.inserted_id})
+
+    # Upsert so we keep only the latest location per patient (replace instead of creating new docs)
+    await db["PatientLocation"].update_one(
+        {"userId": user_id},
+        {"$set": doc, "$setOnInsert": {"createdAt": now}},
+        upsert=True,
+    )
+
+    # Return the latest document
+    created = await db["PatientLocation"].find_one({"userId": user_id})
     payload = serialize_mongo_document(created)
     if not payload:
         logger.error(f"[PATIENT LOCATION] ✗ Failed to save location for userId={user_id} in database '{db_name}'")
