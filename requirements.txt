@@ -1,0 +1,13 @@
+fastapi==0.115.5
+uvicorn[standard]==0.32.1
+python-dotenv==1.0.1
+motor==3.6.0
+PyJWT==2.10.0
+bcrypt==4.2.0
+python-multipart==0.0.17
+python-socketio[asgi]==5.11.4
+
+
+
+
+

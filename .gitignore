@@ -1,0 +1,12 @@
+
+.env
+/remora_patient_app/
+/remora_patient/
+/remora_caregiver_app/
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+env/
+venv/

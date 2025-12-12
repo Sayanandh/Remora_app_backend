@@ -1,0 +1,5 @@
+# DATABASE_URL=mongodb+srv://remorateam25_db_user:AKILjXicexkx6YrF@remora.suxl2tk.mongodb.net/?appName=Remora
+DATABASE_URL="mongodb+srv://remorateam25_db_user:AKILjXicexkx6YrF@remora.suxl2tk.mongodb.net/remora?appName=Remora"
+JWT_SECRET=ecret
+CLIENT_ORIGIN=*
+PORT=4000
