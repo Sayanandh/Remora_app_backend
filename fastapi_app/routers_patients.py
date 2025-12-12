@@ -6,7 +6,7 @@ from bson import ObjectId
 from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel
 
-from .auth import get_current_patient, get_current_user
+from .auth import get_current_caregiver, get_current_patient, get_current_user
 from .db import get_database, serialize_mongo_document
 
 logger = logging.getLogger(__name__)
@@ -290,3 +290,44 @@ async def send_sos_alert(
         "alertId": alert.get("id") if alert else None,
         "caregiversNotified": len(caregiver_ids),
     }
+
+
+@router.get("/caregiver/my-patients", response_model=List[Dict[str, Any]])
+async def list_caregiver_patients(
+    current_user: Dict[str, Any] = Depends(get_current_caregiver),
+):
+    """
+    For a CAREGIVER, return all linked patients with their latest location (if any).
+    """
+    db = get_database()
+    caregiver_id = current_user["id"]
+
+    links = await db["PatientCaregiverLink"].find(
+        {"caregiverUserId": caregiver_id, "status": "ACTIVE"}
+    ).to_list(length=200)
+
+    patients: List[Dict[str, Any]] = []
+
+    for link in links:
+        patient_id = link.get("patientUserId")
+        if not patient_id:
+            continue
+
+        patient_raw = await db["User"].find_one({"_id": ObjectId(patient_id)})
+        patient = serialize_mongo_document(patient_raw)
+        if not patient:
+            continue
+
+        latest_location = await db["PatientLocation"].find_one({"userId": patient_id})
+        location_payload = serialize_mongo_document(latest_location) if latest_location else None
+
+        patients.append(
+            {
+                "id": patient.get("id"),
+                "name": patient.get("name"),
+                "email": patient.get("email"),
+                "location": location_payload,
+            }
+        )
+
+    return patients
