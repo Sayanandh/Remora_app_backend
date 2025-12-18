@@ -1,4 +1,5 @@
 import logging
+from datetime import datetime
 from typing import Any, Dict
 from urllib.parse import urlparse
 
@@ -83,6 +84,39 @@ def serialize_mongo_document(doc: Dict[str, Any] | None) -> Dict[str, Any] | Non
     _id = result.pop("_id", None)
     if _id is not None:
         result["id"] = str(_id)
+    
+    # Convert datetime objects to ISO format strings with timezone info
+    # This ensures proper timezone handling in frontend
+    for key, value in result.items():
+        if isinstance(value, datetime):
+            # Convert to ISO format string with timezone info
+            result[key] = value.isoformat()
+        elif isinstance(value, dict):
+            # Recursively handle nested dictionaries
+            result[key] = _serialize_datetime_in_dict(value)
+        elif isinstance(value, list):
+            # Handle lists that might contain datetime objects
+            result[key] = [_serialize_datetime_in_dict(item) if isinstance(item, dict) 
+                          else item.isoformat() if isinstance(item, datetime) else item 
+                          for item in value]
+    
+    return result
+
+
+def _serialize_datetime_in_dict(d: Dict[str, Any]) -> Dict[str, Any]:
+    """Helper function to recursively serialize datetime objects in dictionaries."""
+    result = {}
+    for key, value in d.items():
+        if isinstance(value, datetime):
+            result[key] = value.isoformat()
+        elif isinstance(value, dict):
+            result[key] = _serialize_datetime_in_dict(value)
+        elif isinstance(value, list):
+            result[key] = [_serialize_datetime_in_dict(item) if isinstance(item, dict) 
+                          else item.isoformat() if isinstance(item, datetime) else item 
+                          for item in value]
+        else:
+            result[key] = value
     return result
 
 

@@ -84,6 +84,12 @@ async def register_device(
     }
 
 
+@router.get("/health", status_code=status.HTTP_200_OK)
+async def sos_health():
+    """Health check endpoint for SOS service."""
+    return {"status": "ok", "service": "sos", "message": "SOS endpoint is accessible"}
+
+
 @router.post("", status_code=status.HTTP_200_OK)
 async def handle_sos(
     body: SOSRequest,
@@ -100,6 +106,8 @@ async def handle_sos(
     
     If deviceToken is provided, the user is automatically identified from the token.
     """
+    logger.info(f"[SOS REQUEST RECEIVED] Device: {body.device}, Token: {deviceToken or body.deviceToken or 'None'}, UserId: {userId or body.userId or 'None'}")
+    
     db = get_database()
     
     # Priority: deviceToken > userId (body) > userId (query param)
@@ -226,14 +234,15 @@ async def handle_sos(
     
     logger.info(f"[SOS] Emergency status set for user {user_id}. Notified {notifications_created} caregivers.")
     
-    # Return success response
+    # Return success response with server timestamp
     return {
         "success": True,
         "message": "SOS received and user status updated to emergency",
         "userId": user_id,
         "status": "emergency",
         "device": body.device,
-        "timestamp": body.timestamp,
+        "timestamp": now.isoformat(),  # Use server timestamp instead of device timestamp
+        "emergencyTriggeredAt": now.isoformat(),  # Also include for clarity
         "caregiversNotified": notifications_created,
         "alertId": alert.get("id") if alert else None,
     }
