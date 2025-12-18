@@ -89,6 +89,10 @@ async def _get_user_by_email(email: str) -> Optional[UserInDB]:
     serialized = serialize_mongo_document(raw)
     if not serialized:
         return None
+    # Some legacy users may not have a role set; default to CAREGIVER to avoid validation failure.
+    if not serialized.get("role"):
+        logger.warning(f"[AUTH] User {email} is missing role; defaulting to CAREGIVER")
+        serialized["role"] = "CAREGIVER"
     return UserInDB(**serialized)
 
 

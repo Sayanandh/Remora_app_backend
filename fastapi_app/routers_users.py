@@ -3,7 +3,7 @@ from typing import Any, Dict, List, Optional
 from bson import ObjectId
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 
-from .auth import get_current_user
+from .auth import get_current_user, get_current_caregiver
 from .db import get_database, serialize_mongo_document
 
 router = APIRouter(prefix="/users", tags=["users"])
@@ -76,6 +76,59 @@ async def search_caregivers(
     
     # Return exact matches first, then others
     return exact_matches + caregivers
+
+
+@router.get("/me/patients", response_model=List[Dict[str, Any]])
+async def get_my_patients(
+    current_user: Dict[str, Any] = Depends(get_current_caregiver),
+):
+    """
+    Get list of all patients connected to the current caregiver.
+    Returns patients that have connected to this caregiver via PatientCaregiverLink.
+    """
+    db = get_database()
+    caregiver_id = current_user["id"]
+    
+    # Find all active links where this caregiver is connected
+    links = await db["PatientCaregiverLink"].find({
+        "caregiverUserId": caregiver_id,
+        "status": "ACTIVE",
+    }).to_list(length=100)
+    
+    patients: List[Dict[str, Any]] = []
+    for link in links:
+        patient_id = link.get("patientUserId")
+        if patient_id:
+            patient = await db["User"].find_one({"_id": ObjectId(patient_id)})
+            if patient:
+                serialized = serialize_mongo_document(patient)
+                if serialized:
+                    # Get patient's latest location if available
+                    latest_location = await db["PatientLocation"].find_one(
+                        {"userId": patient_id},
+                        sort=[("recordedAt", -1)]
+                    )
+                    
+                    patient_data = {
+                        "id": serialized.get("id"),
+                        "name": serialized.get("name"),
+                        "email": serialized.get("email"),
+                        "connectedAt": link.get("createdAt").isoformat() if link.get("createdAt") else None,
+                    }
+                    
+                    # Add latest location if available
+                    if latest_location:
+                        patient_data["latestLocation"] = {
+                            "latitude": latest_location.get("latitude"),
+                            "longitude": latest_location.get("longitude"),
+                            "recordedAt": latest_location.get("recordedAt").isoformat() if latest_location.get("recordedAt") else None,
+                            "accuracy": latest_location.get("accuracy"),
+                            "battery": latest_location.get("battery"),
+                        }
+                    
+                    patients.append(patient_data)
+    
+    return patients
 
 
 

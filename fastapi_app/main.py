@@ -19,6 +19,7 @@ from .routers_locations import router as locations_router
 from .routers_notifications import router as notifications_router
 from .routers_patients import router as patients_router
 from .routers_recipients import router as recipients_router
+from .routers_sos import router as sos_router
 from .routers_users import router as users_router
 
 # Configure logging to show INFO level and above in console
@@ -76,6 +77,7 @@ api = FastAPI(root_path="/api")
 api.include_router(auth_router)
 api.include_router(users_router)
 api.include_router(recipients_router)
+api.include_router(sos_router)
 api.include_router(alerts_router)
 api.include_router(notifications_router)
 api.include_router(locations_router)
