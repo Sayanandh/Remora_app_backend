@@ -1,6 +1,6 @@
 import logging
 import secrets
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 from typing import Any, Dict, Optional
 
 from bson import ObjectId
@@ -84,6 +84,12 @@ async def register_device(
     }
 
 
+@router.get("/health", status_code=status.HTTP_200_OK)
+async def sos_health():
+    """Health check endpoint for SOS service."""
+    return {"status": "ok", "service": "sos", "message": "SOS endpoint is accessible"}
+
+
 @router.post("", status_code=status.HTTP_200_OK)
 async def handle_sos(
     body: SOSRequest,
@@ -100,141 +106,168 @@ async def handle_sos(
     
     If deviceToken is provided, the user is automatically identified from the token.
     """
-    db = get_database()
-    
-    # Priority: deviceToken > userId (body) > userId (query param)
-    device_token = body.deviceToken or deviceToken
-    user_id = body.userId or userId
-    
-    user_object_id = None
-    
-    # If device token is provided, look up user by token
-    if device_token:
-        # Find user by device token
-        user_raw = await db["User"].find_one({
-            "deviceTokens.token": device_token
-        })
+    try:
+        logger.info(f"[SOS REQUEST RECEIVED] Device: {body.device}, Token: {deviceToken or body.deviceToken or 'None'}, UserId: {userId or body.userId or 'None'}")
         
-        if not user_raw:
-            raise HTTPException(
-                status_code=status.HTTP_401_UNAUTHORIZED,
-                detail="Invalid device token"
-            )
+        db = get_database()
         
-        user_object_id = user_raw["_id"]
-        user_id = str(user_object_id)
-        logger.info(f"[SOS] User identified via device token: {user_id}")
+        # Priority: deviceToken > userId (body) > userId (query param)
+        device_token = body.deviceToken or deviceToken
+        user_id = body.userId or userId
     
-    # Fallback to userId if no device token
-    elif user_id:
-        try:
-            user_object_id = ObjectId(user_id)
-        except Exception:
+        user_object_id = None
+        
+        # If device token is provided, look up user by token
+        if device_token:
+            # Find user by device token
+            user_raw = await db["User"].find_one({
+                "deviceTokens.token": device_token
+            })
+            
+            if not user_raw:
+                raise HTTPException(
+                    status_code=status.HTTP_401_UNAUTHORIZED,
+                    detail="Invalid device token"
+                )
+            
+            user_object_id = user_raw["_id"]
+            user_id = str(user_object_id)
+            logger.info(f"[SOS] User identified via device token: {user_id}")
+        
+        # Fallback to userId if no device token
+        elif user_id:
+            try:
+                user_object_id = ObjectId(user_id)
+            except Exception:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail="Invalid userId format"
+                )
+            
+            user_raw = await db["User"].find_one({"_id": user_object_id})
+            if not user_raw:
+                raise HTTPException(
+                    status_code=status.HTTP_404_NOT_FOUND,
+                    detail="User not found"
+                )
+            logger.info(f"[SOS] User identified via userId: {user_id}")
+        else:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
-                detail="Invalid userId format"
+                detail="Either deviceToken or userId is required. Use deviceToken for dynamic user identification."
             )
         
-        user_raw = await db["User"].find_one({"_id": user_object_id})
-        if not user_raw:
-            raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND,
-                detail="User not found"
-            )
-        logger.info(f"[SOS] User identified via userId: {user_id}")
-    else:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Either deviceToken or userId is required. Use deviceToken for dynamic user identification."
-        )
-    
-    # Update user status to 'emergency' and update timestamp
-    now = datetime.now(timezone.utc)
-    result = await db["User"].update_one(
-        {"_id": user_object_id},
-        {
-            "$set": {
-                "status": "emergency",
-                "updatedAt": now,
-                "emergencyTriggeredAt": now,  # Track when emergency was triggered
+        # Update user status to 'emergency' and update timestamp
+        now = datetime.now(timezone.utc)
+        result = await db["User"].update_one(
+            {"_id": user_object_id},
+            {
+                "$set": {
+                    "status": "emergency",
+                    "updatedAt": now,
+                    "emergencyTriggeredAt": now,  # Track when emergency was triggered
+                }
             }
-        }
-    )
-    
-    if result.modified_count == 0:
-        logger.warning(f"[SOS] User {user_id} status update had no effect (may already be emergency)")
-    
-    # Get user info for notifications
-    user_name = user_raw.get("name", "Patient")
-    user_email = user_raw.get("email", "Unknown")
-    
-    # Find connected caregivers via PatientCaregiverLink
-    links = await db["PatientCaregiverLink"].find({
-        "patientUserId": user_id,
-        "status": "ACTIVE",
-    }).to_list(length=100)
-    
-    caregiver_ids = [link["caregiverUserId"] for link in links]
-    
-    # Get patient's latest location if available
-    latest_location = await db["PatientLocation"].find_one(
-        {"userId": user_id},
-        sort=[("recordedAt", -1)]
-    )
-    
-    # Create notifications for all connected caregivers
-    notifications_created = 0
-    for caregiver_id in caregiver_ids:
-        notification_doc = {
-            "userId": caregiver_id,
-            "title": f"🚨 SOS Alert from {user_name}",
-            "message": f"{user_name} has triggered an emergency SOS alert. Immediate attention required!",
+        )
+        
+        if result.modified_count == 0:
+            logger.warning(f"[SOS] User {user_id} status update had no effect (may already be emergency)")
+        
+        # Get user info for notifications
+        user_name = user_raw.get("name", "Patient")
+        user_email = user_raw.get("email", "Unknown")
+        
+        # Find connected caregivers via PatientCaregiverLink
+        links = await db["PatientCaregiverLink"].find({
+            "patientUserId": user_id,
+            "status": "ACTIVE",
+        }).to_list(length=100)
+        
+        caregiver_ids = [link["caregiverUserId"] for link in links]
+        
+        # Get patient's latest location if available
+        latest_location = await db["PatientLocation"].find_one(
+            {"userId": user_id},
+            sort=[("recordedAt", -1)]
+        )
+        
+        # Create notifications for all connected caregivers
+        notifications_created = 0
+        for caregiver_id in caregiver_ids:
+            notification_doc = {
+                "userId": caregiver_id,
+                "title": f"🚨 SOS Alert from {user_name}",
+                "message": f"{user_name} has triggered an emergency SOS alert. Immediate attention required!",
+                "type": "SOS",
+                "isRead": False,
+                "createdAt": now,
+                "relatedPatientId": user_id,
+                "relatedPatientName": user_name,
+                "latitude": latest_location.get("latitude") if latest_location else None,
+                "longitude": latest_location.get("longitude") if latest_location else None,
+            }
+            await db["Notification"].insert_one(notification_doc)
+            notifications_created += 1
+        
+        # Create alert for real-time notification via Socket.IO
+        # Use recipientId pattern for alerts (caregivers subscribe to their patient's alerts)
+        alert_doc = {
+            "recipientId": user_id,  # Patient ID (caregivers listen to patient alerts)
+            "title": f"SOS Alert from {user_name}",
+            "message": f"{user_name} ({user_email}) has triggered an emergency SOS alert.",
             "type": "SOS",
-            "isRead": False,
+            "severity": "CRITICAL",
+            "isAcknowledged": False,
             "createdAt": now,
-            "relatedPatientId": user_id,
-            "relatedPatientName": user_name,
+            "patientUserId": user_id,
+            "caregiverUserIds": caregiver_ids,
             "latitude": latest_location.get("latitude") if latest_location else None,
             "longitude": latest_location.get("longitude") if latest_location else None,
         }
-        await db["Notification"].insert_one(notification_doc)
-        notifications_created += 1
-    
-    # Create alert for real-time notification via Socket.IO
-    # Use recipientId pattern for alerts (caregivers subscribe to their patient's alerts)
-    alert_doc = {
-        "recipientId": user_id,  # Patient ID (caregivers listen to patient alerts)
-        "title": f"SOS Alert from {user_name}",
-        "message": f"{user_name} ({user_email}) has triggered an emergency SOS alert.",
-        "type": "SOS",
-        "severity": "CRITICAL",
-        "isAcknowledged": False,
-        "createdAt": now,
-        "patientUserId": user_id,
-        "caregiverUserIds": caregiver_ids,
-        "latitude": latest_location.get("latitude") if latest_location else None,
-        "longitude": latest_location.get("longitude") if latest_location else None,
-    }
-    alert_result = await db["Alert"].insert_one(alert_doc)
-    alert = serialize_mongo_document(await db["Alert"].find_one({"_id": alert_result.inserted_id}))
-    
-    # Emit real-time alert to caregivers (they should be listening to patient's alerts)
-    if alert:
-        for caregiver_id in caregiver_ids:
-            # Caregivers can subscribe to alerts for their patients
-            emit_alert_new(user_id, alert)  # Emit to patient's room, caregivers listen
-    
-    logger.info(f"[SOS] Emergency status set for user {user_id}. Notified {notifications_created} caregivers.")
-    
-    # Return success response
-    return {
-        "success": True,
-        "message": "SOS received and user status updated to emergency",
-        "userId": user_id,
-        "status": "emergency",
-        "device": body.device,
-        "timestamp": body.timestamp,
-        "caregiversNotified": notifications_created,
-        "alertId": alert.get("id") if alert else None,
-    }
+        try:
+            alert_result = await db["Alert"].insert_one(alert_doc)
+            alert = serialize_mongo_document(await db["Alert"].find_one({"_id": alert_result.inserted_id}))
+            
+            # Emit real-time alert to caregivers (they should be listening to patient's alerts)
+            if alert:
+                for caregiver_id in caregiver_ids:
+                    # Caregivers can subscribe to alerts for their patients
+                    emit_alert_new(user_id, alert)  # Emit to patient's room, caregivers listen
+        except Exception as e:
+            logger.error(f"[SOS] Error creating/emitting alert: {e}", exc_info=True)
+            alert = None
+        
+        logger.info(f"[SOS] Emergency status set for user {user_id}. Notified {notifications_created} caregivers.")
+        
+        # Convert UTC to IST for response
+        try:
+            IST = timezone(timedelta(hours=5, minutes=30))
+            now_ist = now.astimezone(IST)
+            timestamp_ist = now_ist.isoformat()
+        except Exception as e:
+            logger.error(f"[SOS] Error converting timestamp to IST: {e}", exc_info=True)
+            # Fallback to UTC
+            timestamp_ist = now.isoformat()
+        
+        # Return success response with server timestamp in IST
+        return {
+            "success": True,
+            "message": "SOS received and user status updated to emergency",
+            "userId": user_id,
+            "status": "emergency",
+            "device": body.device,
+            "timestamp": timestamp_ist,
+            "emergencyTriggeredAt": timestamp_ist,
+            "caregiversNotified": notifications_created,
+            "alertId": alert.get("id") if alert else None,
+        }
+    except HTTPException:
+        # Re-raise HTTP exceptions (they're intentional)
+        raise
+    except Exception as e:
+        logger.error(f"[SOS] Unexpected error in handle_sos: {e}", exc_info=True)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Internal server error: {str(e)}"
+        )
 

@@ -1,14 +1,16 @@
 import logging
 import os
+import time
 
 import dotenv
 import socketio
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.middleware.trustedhost import TrustedHostMiddleware
 from starlette.responses import JSONResponse
 from starlette.status import HTTP_200_OK
 from starlette.types import Scope
+from starlette.middleware.base import BaseHTTPMiddleware
 
 from .auth import router as auth_router
 from .config import get_settings
@@ -29,9 +31,28 @@ logging.basicConfig(
     datefmt='%Y-%m-%d %H:%M:%S'
 )
 
+logger = logging.getLogger(__name__)
+
 dotenv.load_dotenv()
 
 settings = get_settings()
+
+
+# Request logging middleware
+class RequestLoggingMiddleware(BaseHTTPMiddleware):
+    async def dispatch(self, request: Request, call_next):
+        start_time = time.time()
+        # Log incoming request
+        logger.info(f"[REQUEST] {request.method} {request.url.path} - Client: {request.client.host if request.client else 'unknown'}")
+        if request.url.query:
+            logger.info(f"[REQUEST] Query params: {request.url.query}")
+        
+        response = await call_next(request)
+        
+        process_time = time.time() - start_time
+        logger.info(f"[RESPONSE] {request.method} {request.url.path} - Status: {response.status_code} - Time: {process_time:.3f}s")
+        
+        return response
 
 # Check for required environment variables on startup
 if not settings.database_url:
@@ -45,6 +66,9 @@ if not settings.database_url:
     # Don't exit immediately, let it fail on first DB access with a clearer error
 
 app = FastAPI(title=settings.app_name)
+
+# Add request logging middleware first (outermost)
+app.add_middleware(RequestLoggingMiddleware)
 
 if settings.client_origin == "*":
     origins = ["*"]
