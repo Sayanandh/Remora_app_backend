@@ -4,12 +4,12 @@ from datetime import datetime, timezone, timedelta
 from typing import Any, Dict, Optional
 
 from bson import ObjectId
-from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 from pydantic import BaseModel
 
 from .auth import get_current_user
 from .db import get_database, serialize_mongo_document
-from .realtime import emit_alert_new
+from .realtime import emit_alert_new, emit_device_voice_toggle
 
 logger = logging.getLogger(__name__)
 
@@ -27,6 +27,77 @@ class SOSRequest(BaseModel):
 class DeviceRegisterRequest(BaseModel):
     deviceName: Optional[str] = "ESP8266"
     deviceType: Optional[str] = "esp8266"
+
+
+class VoiceToggleRequest(BaseModel):
+    """Request from IoT device to toggle voice recording on the patient app."""
+    device: str = "esp8266"
+    deviceToken: Optional[str] = None
+
+
+@router.get("/voice-toggle")
+async def voice_toggle_get():
+    """
+    GET handler for voice-toggle endpoint - returns helpful error message.
+    This endpoint only accepts POST requests from IoT devices.
+    """
+    raise HTTPException(
+        status_code=status.HTTP_405_METHOD_NOT_ALLOWED,
+        detail={
+            "error": "Method Not Allowed",
+            "message": "This endpoint only accepts POST requests. Use POST with JSON body containing 'deviceToken'.",
+            "example": {
+                "method": "POST",
+                "url": "/api/sos/voice-toggle",
+                "headers": {
+                    "Content-Type": "application/json",
+                    "ngrok-skip-browser-warning": "true"
+                },
+                "body": {
+                    "device": "esp8266",
+                    "deviceToken": "your-device-token-here"
+                }
+            }
+        }
+    )
+
+
+@router.post("/voice-toggle", status_code=status.HTTP_200_OK)
+async def voice_toggle(
+    request: Request,
+    body: VoiceToggleRequest,
+    deviceToken: Optional[str] = Query(default=None, description="Device token"),
+):
+    """
+    When the IoT button is pressed (for voice recording), the device calls this endpoint.
+    The backend notifies the patient app via Socket.IO to start or stop voice recording.
+    Same device token as SOS; no auth required (device token identifies the patient).
+    """
+    # Log request details for debugging
+    try:
+        user_agent = request.headers.get("user-agent", "unknown")
+        ngrok_header = request.headers.get("ngrok-skip-browser-warning", "not set")
+        logger.info(f"[VOICE TOGGLE] POST request - User-Agent: {user_agent[:50]}, ngrok-header: {ngrok_header}")
+    except Exception:
+        pass
+    
+    token = body.deviceToken or deviceToken
+    if not token:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="deviceToken is required (body or query)",
+        )
+    db = get_database()
+    user_raw = await db["User"].find_one({"deviceTokens.token": token})
+    if not user_raw:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid device token",
+        )
+    user_id = str(user_raw["_id"])
+    emit_device_voice_toggle(user_id)
+    logger.info(f"[VOICE TOGGLE] Emitted device:voice_toggle for user {user_id}")
+    return {"success": True, "message": "Voice toggle sent to app", "userId": user_id}
 
 
 @router.post("/register-device", status_code=status.HTTP_200_OK)
