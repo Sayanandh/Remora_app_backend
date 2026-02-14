@@ -1,4 +1,4 @@
-
+.gitignore
 .env
 /remora_patient_app/
 /remora_patient/
@@ -10,3 +10,4 @@ __pycache__/
 .Python
 env/
 venv/
+ESP8266_SOS_Example.ino

@@ -49,9 +49,17 @@ class RequestLoggingMiddleware(BaseHTTPMiddleware):
     async def dispatch(self, request: Request, call_next):
         start_time = time.time()
         # Log incoming request
-        logger.info(f"[REQUEST] {request.method} {request.url.path} - Client: {request.client.host if request.client else 'unknown'}")
+        client_host = request.client.host if request.client else 'unknown'
+        logger.info(f"[REQUEST] {request.method} {request.url.path} - Client: {client_host}")
         if request.url.query:
             logger.info(f"[REQUEST] Query params: {request.url.query}")
+        
+        # Log important headers for debugging ngrok issues
+        if request.url.path.startswith('/api/sos'):
+            ngrok_header = request.headers.get('ngrok-skip-browser-warning', 'NOT SET')
+            user_agent = request.headers.get('user-agent', 'NOT SET')
+            content_type = request.headers.get('content-type', 'NOT SET')
+            logger.info(f"[REQUEST] Headers - ngrok-skip-browser-warning: {ngrok_header}, User-Agent: {user_agent[:50] if len(user_agent) > 50 else user_agent}, Content-Type: {content_type}")
         
         response = await call_next(request)
         

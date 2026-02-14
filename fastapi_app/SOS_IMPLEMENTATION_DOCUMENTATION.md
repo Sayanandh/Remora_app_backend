@@ -452,6 +452,67 @@ void sendSOS() {
 }
 ```
 
+### Two-button setup (SOS + Voice recording)
+
+Use **two physical buttons**: one for SOS, one to start/stop voice recording on the patient app.
+
+| Button | Action | Endpoint | Effect |
+|--------|--------|----------|--------|
+| **Button 1** | SOS | `POST /api/sos` | Alerts caregivers, sets emergency status |
+| **Button 2** | Voice | `POST /api/sos/voice-toggle` | Toggles voice recording in the app (press to start, press again to stop) |
+
+Same `deviceToken` for both; register the device once in the app to get the token.
+
+```cpp
+#include <ESP8266WiFi.h>
+#include <ESP8266HTTPClient.h>
+#include <WiFiClientSecure.h>
+
+#define SOS_BUTTON     D5   // Emergency SOS
+#define VOICE_BUTTON   D6   // Start/stop voice recording
+
+const char* WIFI_SSID = "YourWiFi";
+const char* WIFI_PASS = "YourPassword";
+const char* DEVICE_TOKEN = "PASTE_TOKEN_HERE";  // From patient app (Register New Device)
+const char* SOS_URL       = "https://your-api.com/api/sos";
+const char* VOICE_URL     = "https://your-api.com/api/sos/voice-toggle";
+
+void sendSOS() {
+  WiFiClientSecure client;
+  client.setInsecure();
+  HTTPClient http;
+  http.begin(client, SOS_URL);
+  http.addHeader("Content-Type", "application/json");
+  String body = "{\"type\":\"sos\",\"device\":\"esp8266\",\"deviceToken\":\"" + String(DEVICE_TOKEN) + "\"}";
+  http.POST(body);
+  http.end();
+}
+
+void sendVoiceToggle() {
+  WiFiClientSecure client;
+  client.setInsecure();
+  HTTPClient http;
+  http.begin(client, VOICE_URL);
+  http.addHeader("Content-Type", "application/json");
+  String body = "{\"device\":\"esp8266\",\"deviceToken\":\"" + String(DEVICE_TOKEN) + "\"}";
+  http.POST(body);
+  http.end();
+}
+
+void setup() {
+  pinMode(SOS_BUTTON, INPUT_PULLUP);
+  pinMode(VOICE_BUTTON, INPUT_PULLUP);
+  WiFi.begin(WIFI_SSID, WIFI_PASS);
+  // ...
+}
+
+void loop() {
+  if (digitalRead(SOS_BUTTON) == LOW)   { sendSOS();   delay(500); }  // debounce
+  if (digitalRead(VOICE_BUTTON) == LOW) { sendVoiceToggle(); delay(500); }
+  delay(50);
+}
+```
+
 ---
 
 ## 🔔 Caregiver Notifications
