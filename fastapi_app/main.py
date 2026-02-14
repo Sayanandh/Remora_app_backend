@@ -1,12 +1,14 @@
 import logging
 import os
 import time
+import threading
 
 import dotenv
 import socketio
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.middleware.trustedhost import TrustedHostMiddleware
+from pydantic import BaseModel
 from starlette.responses import JSONResponse
 from starlette.status import HTTP_200_OK
 from starlette.types import Scope
@@ -15,6 +17,8 @@ from starlette.middleware.base import BaseHTTPMiddleware
 from .auth import router as auth_router
 from .config import get_settings
 from .realtime import sio
+from . import state
+from .recorder import record_audio
 from .routers_activities import router as activities_router
 from .routers_alerts import router as alerts_router
 from .routers_locations import router as locations_router
@@ -22,7 +26,9 @@ from .routers_notifications import router as notifications_router
 from .routers_patients import router as patients_router
 from .routers_recipients import router as recipients_router
 from .routers_sos import router as sos_router
+from .routers_sos import router as sos_router
 from .routers_users import router as users_router
+from . import routers_iot
 
 # Configure logging to show INFO level and above in console
 logging.basicConfig(
@@ -86,6 +92,43 @@ app.add_middleware(
 app.add_middleware(TrustedHostMiddleware, allowed_hosts=["*"])
 
 
+# Audio Recording Models and Endpoints
+class ToggleRequest(BaseModel):
+    source: str  # esp8266 / flutter
+
+
+@app.post("/toggle")
+def toggle_recording(req: ToggleRequest):
+    """Start or stop audio recording from specified source."""
+    if not state.recording:
+        state.stop_event.clear()
+        state.recording_thread = threading.Thread(target=record_audio)
+        state.recording_thread.start()
+        state.recording = True
+        return {
+            "recording": True,
+            "action": "started",
+            "source": req.source
+        }
+    else:
+        state.stop_event.set()
+        state.recording_thread.join()
+        state.recording = False
+        return {
+            "recording": False,
+            "action": "stopped",
+            "source": req.source
+        }
+
+
+@app.get("/recording-status")
+def get_recording_status():
+    """Get current recording status."""
+    return {
+        "recording": state.recording
+    }
+
+
 @app.get("/health", status_code=HTTP_200_OK)
 async def health():
     return JSONResponse({"status": "ok"})
@@ -96,6 +139,7 @@ async def health():
 app.include_router(auth_router)  # /auth/* and /api/auth/*
 app.include_router(users_router)  # /users/* and /api/users/*
 app.include_router(patients_router)  # /patients/* and /api/patients/*
+app.include_router(routers_iot.router) # /sensor-data, etc. for IoT Legacy
 
 api = FastAPI(root_path="/api")
 api.include_router(auth_router)
@@ -107,6 +151,7 @@ api.include_router(notifications_router)
 api.include_router(locations_router)
 api.include_router(activities_router)
 api.include_router(patients_router)
+api.include_router(routers_iot.router) # /api/command, /api/navigate
 
 app.mount("/api", api)
 
