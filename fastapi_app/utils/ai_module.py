@@ -71,17 +71,37 @@ def speech_to_text(audio_path):
     try:
         rec = stt.Recognizer()
         
-        # If input is mp3 convert to wav first
-        if audio_path.endswith(".mp3"):
+        # Convert non-WAV formats to WAV first (speech_recognition requires WAV)
+        audio_ext = audio_path.lower().split('.')[-1] if '.' in audio_path else ''
+        needs_conversion = audio_ext in ['mp3', 'm4a', 'aac', 'flac', 'ogg', 'wma']
+        
+        if needs_conversion:
             try:
-                sound = AudioSegment.from_mp3(audio_path)
-                audio_wav = audio_path.replace(".mp3", ".wav")
+                logger.info(f"🔄 Converting {audio_ext.upper()} to WAV...")
+                # Use from_file() which auto-detects format
+                if audio_ext == 'm4a':
+                    sound = AudioSegment.from_file(audio_path, format="m4a")
+                elif audio_ext == 'mp3':
+                    sound = AudioSegment.from_mp3(audio_path)
+                elif audio_ext == 'aac':
+                    sound = AudioSegment.from_file(audio_path, format="aac")
+                else:
+                    # Try auto-detection for other formats
+                    sound = AudioSegment.from_file(audio_path)
+                
+                # Create temporary WAV file
+                audio_wav = audio_path.rsplit('.', 1)[0] + '.wav'
+                # Export as WAV with proper settings for speech recognition
+                # Set to mono channel and 16kHz sample rate (recommended for speech recognition)
+                sound = sound.set_channels(1).set_frame_rate(16000)
                 sound.export(audio_wav, format="wav")
+                logger.info(f"✅ Converted to WAV: {audio_wav}")
                 audio_path = audio_wav
             except Exception as e:
-                logger.error(f"Failed to convert MP3 to WAV: {e}")
+                logger.error(f"❌ Failed to convert {audio_ext.upper()} to WAV: {e}")
                 return None
 
+        # Now process with speech_recognition (requires WAV)
         with stt.AudioFile(audio_path) as source:
             audio_data = rec.record(source)
 

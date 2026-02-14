@@ -1,10 +1,13 @@
 # routers_iot.py
-from fastapi import APIRouter, HTTPException, BackgroundTasks
+from fastapi import APIRouter, HTTPException, BackgroundTasks, UploadFile, File
 from pydantic import BaseModel
 from typing import List, Optional
 from datetime import datetime
 import time
 import logging
+import os
+import tempfile
+import asyncio
 
 from .utils import ai_module
 
@@ -182,3 +185,68 @@ async def api_ultrasound_nav(data: UltrasoundData, background_tasks: BackgroundT
         }
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Ultrasound data error: {str(e)}")
+
+# ============================================================
+# 🎤 AUDIO PROCESSING ENDPOINT (Backup feature for voice recording)
+# ============================================================
+
+@router.post("/process-audio")
+async def process_audio(audio_file: UploadFile = File(...)):
+    """
+    Process audio file from app (backup feature).
+    Receives audio file, converts to text using speech_to_text, and returns transcription.
+    Supports .m4a, .mp3, .wav formats.
+    """
+    try:
+        # Validate file type
+        allowed_extensions = ['.m4a', '.mp3', '.wav', '.aac']
+        file_ext = os.path.splitext(audio_file.filename or '')[1].lower()
+        if file_ext not in allowed_extensions:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Unsupported file type. Allowed: {', '.join(allowed_extensions)}"
+            )
+        
+        logger.info(f"🎤 Received audio file: {audio_file.filename} ({file_ext})")
+        
+        # Save uploaded file to temporary location
+        with tempfile.NamedTemporaryFile(delete=False, suffix=file_ext) as tmp_file:
+            tmp_path = tmp_file.name
+            content = await audio_file.read()
+            tmp_file.write(content)
+        
+        try:
+            # Process audio using speech_to_text module only
+            # Note: speech_to_text is synchronous, so we run it in a thread
+            transcribed_text = await asyncio.to_thread(ai_module.speech_to_text, tmp_path)
+            
+            if transcribed_text is None:
+                raise HTTPException(
+                    status_code=500,
+                    detail="Failed to transcribe audio. Please check audio quality and format."
+                )
+            
+            logger.info(f"✅ Audio transcribed via speech_to_text: {transcribed_text[:100]}...")
+            
+            return {
+                "status": "success",
+                "transcribed_text": transcribed_text,
+                "filename": audio_file.filename
+            }
+        finally:
+            # Clean up temporary files (original and converted WAV if created)
+            try:
+                if os.path.exists(tmp_path):
+                    os.unlink(tmp_path)
+                # Also clean up converted WAV file if it was created
+                wav_path = tmp_path.rsplit('.', 1)[0] + '.wav'
+                if os.path.exists(wav_path) and wav_path != tmp_path:
+                    os.unlink(wav_path)
+            except Exception as e:
+                logger.warning(f"⚠️ Failed to delete temp file(s): {e}")
+                
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"❌ Audio processing error: {e}")
+        raise HTTPException(status_code=500, detail=f"Audio processing error: {str(e)}")
